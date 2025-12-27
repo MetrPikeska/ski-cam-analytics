@@ -7,4 +7,12 @@ opencv-python==4.10.0.84
 onnxruntime==1.20.1
 websockets==14.1
 
+# Database
+sqlalchemy==2.0.36
+pymysql==1.1.1
+cryptography==44.0.0  # Required for MySQL SSL
+
+# Environment variables
+python-dotenv==1.0.1
+
 # Poznámka: FFmpeg musí být nainstalován samostatně (není Python package)
