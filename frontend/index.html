@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="cs">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Ski Cam Analytics - Dashboard</title>
+    <link rel="stylesheet" href="/static/styles.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+</head>
+<body>
+    <div class="container">
+        <!-- Header -->
+        <header>
+            <h1>⛷️ Ski Cam Analytics</h1>
+            <div class="stream-info">
+                <span id="stream-status" class="status-badge">●</span>
+                <span id="stream-url">stream.teal.cz/cam273</span>
+            </div>
+        </header>
+
+        <!-- Control Panel -->
+        <div class="control-panel">
+            <div class="status-section">
+                <div class="status-indicator">
+                    <div id="pipeline-status" class="status-badge large stopped">STOPPED</div>
+                    <div class="status-details">
+                        <span id="fps-display">FPS: 0</span>
+                        <span id="uptime-display">Uptime: --</span>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="button-section">
+                <button id="btn-start" class="btn btn-start">▶️ START ANALÝZY</button>
+                <button id="btn-stop" class="btn btn-stop" disabled>⏹️ STOP ANALÝZY</button>
+            </div>
+        </div>
+
+        <!-- Metrics Dashboard -->
+        <div class="metrics-grid">
+            <!-- Occupancy -->
+            <div class="metric-card">
+                <div class="metric-header">
+                    <h3>👥 Aktuální Occupancy</h3>
+                    <span class="metric-subtitle">Počet lidí ve scéně</span>
+                </div>
+                <div class="metric-value" id="occupancy-value">0</div>
+            </div>
+
+            <!-- Crossings This Run -->
+            <div class="metric-card">
+                <div class="metric-header">
+                    <h3>🎿 Crossings (celkem)</h3>
+                    <span class="metric-subtitle">Od spuštění analýzy</span>
+                </div>
+                <div class="metric-value" id="crossings-total-value">0</div>
+            </div>
+
+            <!-- Crossings Last 1m -->
+            <div class="metric-card secondary">
+                <div class="metric-header">
+                    <h3>⏱️ Poslední 1 min</h3>
+                </div>
+                <div class="metric-value small" id="crossings-1m-value">0</div>
+            </div>
+
+            <!-- Crossings Last 10m -->
+            <div class="metric-card secondary">
+                <div class="metric-header">
+                    <h3>⏱️ Posledních 10 min</h3>
+                </div>
+                <div class="metric-value small" id="crossings-10m-value">0</div>
+            </div>
+        </div>
+
+        <!-- Charts -->
+        <div class="charts-section">
+            <!-- Live Video Feed -->
+            <div class="video-card">
+                <h3>📹 Live Video s detekcí</h3>
+                <div class="video-container">
+                    <img id="video-feed" src="/api/frame/latest" alt="Video feed">
+                </div>
+            </div>
+            
+            <div class="chart-card">
+                <h3>📊 Occupancy za poslední hodinu</h3>
+                <canvas id="occupancy-chart"></canvas>
+            </div>
+
+            <div class="chart-card">
+                <h3>📊 Crossings za poslední hodinu</h3>
+                <canvas id="crossings-chart"></canvas>
+            </div>
+        </div>
+
+        <!-- Footer / Info -->
+        <footer>
+            <div class="info-text">
+                <p><strong>Poznámka:</strong> Aplikace běží pouze po ručním spuštění. Metriky se ukládají po minutách do SQLite databáze.</p>
+                <p><strong>ROI / Line Crossing:</strong> Nastavte v <code>backend/app/config.py</code> a restartujte pipeline.</p>
+            </div>
+            <div class="version">v1.0.0 | Local deployment</div>
+        </footer>
+    </div>
+
+    <script src="/static/app.js"></script>
+</body>
+</html>
