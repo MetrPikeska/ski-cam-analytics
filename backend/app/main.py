@@ -36,6 +36,9 @@ storage = MetricsStorage(config.DB_PATH)
 # WebSocket connections
 active_websockets = set()
 
+# Broadcast task (globální)
+broadcast_task = None
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -44,6 +47,8 @@ async def lifespan(app: FastAPI):
     
     DŮLEŽITÉ: Pipeline se NESPOUŠTÍ automaticky při startu serveru!
     """
+    global broadcast_task
+    
     logger.info("=== SERVER STARTING ===")
     logger.info("Pipeline is NOT started automatically")
     logger.info("Use POST /api/pipeline/start to begin analysis")
@@ -62,11 +67,12 @@ async def lifespan(app: FastAPI):
         pipeline.stop()
     
     # Zrušit broadcast task
-    broadcast_task.cancel()
-    try:
-        await broadcast_task
-    except asyncio.CancelledError:
-        pass
+    if broadcast_task:
+        broadcast_task.cancel()
+        try:
+            await broadcast_task
+        except asyncio.CancelledError:
+            pass
     
     logger.info("=== SERVER STOPPED ===")
 

@@ -23,23 +23,27 @@ MVP aplikace pro počítání lidí v lyžařském areálu z HLS video streamu.
 
 ### 1. Požadavky
 
-- **Python 3.11** (nebo novější)
-- **FFmpeg** - musí být nainstalovaný a dostupný v PATH
+- **Python 3.10+** (testováno na Python 3.10)
+- **FFmpeg** - **KRITICKÁ ZÁVISLOST** pro načítání HLS streamu
 
-### 2. Instalace Python závislostí
+### 2. Instalace FFmpeg
 
-```bash
-cd backend
-pip install -r requirements.txt
+**⚠️ DŮLEŽITÉ: FFmpeg musí být nainstalován PŘED spuštěním aplikace!**
+
+#### Windows (doporučeno - winget):
+```powershell
+winget install --id Gyan.FFmpeg -e --accept-source-agreements
 ```
 
-### 3. Instalace FFmpeg
+Po instalaci **restartujte PowerShell** nebo aktualizujte PATH:
+```powershell
+$env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
+```
 
-#### Windows:
-1. Stáhněte FFmpeg z https://ffmpeg.org/download.html
-2. Rozbalte do složky (např. `C:\ffmpeg`)
-3. Přidejte `C:\ffmpeg\bin` do PATH
-4. Ověřte: `ffmpeg -version`
+Ověření:
+```powershell
+ffmpeg -version
+```
 
 #### Linux:
 ```bash
@@ -52,41 +56,42 @@ sudo apt install ffmpeg
 brew install ffmpeg
 ```
 
+### 3. Instalace Python závislostí
+
+```bash
+cd backend
+pip install -r requirements.txt
+```
+
+**Poznámka:** Požadavky zahrnují:
+- `numpy>=2.1.3` (Python 3.10+ kompatibilní verze)
+- `opencv-python>=4.10.0`
+- `onnxruntime>=1.20.1`
+- `fastapi>=0.115.5`
+- `uvicorn>=0.34.0`
+
 ### 4. YOLO Model
 
 Aplikace potřebuje YOLO ONNX model pro detekci osob.
 
 **Umístění:** `models/yolo.onnx`
 
-**Jak získat model:**
+**Jak získat model (nejjednodušší způsob):**
 
-Máte několik možností:
+1. Stáhněte YOLOv8n ONNX model přímo:
+   - https://github.com/ultralytics/assets/releases/download/v8.1.0/yolov8n.onnx
 
-#### A) YOLOv8 (doporučeno)
+2. Uložte jako `models/yolo.onnx` v kořenovém adresáři projektu
+
+**Alternativně - export z PyTorch:**
+
 ```bash
 pip install ultralytics
 python -c "from ultralytics import YOLO; model = YOLO('yolov8n.pt'); model.export(format='onnx')"
-```
-Vyexportovaný model přesuňte do `models/yolo.onnx`
-
-#### B) YOLOv5
-1. Stáhněte pre-trained model: https://github.com/ultralytics/yolov5/releases
-2. Export do ONNX:
-```bash
-git clone https://github.com/ultralytics/yolov5
-cd yolov5
-python export.py --weights yolov5n.pt --include onnx
+mv yolov8n.onnx models/yolo.onnx
 ```
 
-#### C) Vlastní model
-- Použijte jakýkoliv YOLO model trénovaný na COCO datasetu
-- Zajistěte že class 0 = person
-- Export do ONNX formátu
-
-**Poznámka:** Do `models/` složky přidejte `.gitignore`:
-```
-*.onnx
-```
+**Poznámka:** Model `yolo.onnx` je ignorován gitem (.gitignore)
 
 ---
 
@@ -134,18 +139,27 @@ LINE_CROSSING = None  # Příklad: [(200, 300), (440, 300)]
 
 ### 1. Spusťte backend server
 
-```bash
+**Windows PowerShell (doporučeno):**
+```powershell
 cd backend
-python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
+$env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
+$env:PYTHONPATH = "C:\Users\<VaseJmeno>\Documents\GitHub\ski-cam-analytics\backend"
+python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
-Nebo:
+**Linux/macOS:**
 ```bash
 cd backend
-python -m app.main
+export PYTHONPATH="${PWD}"
+python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
 Server běží na: **http://localhost:8000**
+
+**Poznámky:**
+- `--reload` zapíná auto-restart při změnách kódu (vhodné pro vývoj)
+- FFmpeg **musí být v PATH** (viz instalační sekce)
+- Pipeline se **NESPOUŠTÍ automaticky** při startu serveru
 
 ### 2. Otevřete dashboard v prohlížeči
 
@@ -157,7 +171,13 @@ http://localhost:8000
 
 Klikněte na tlačítko **"▶️ START ANALÝZY"** v dashboardu.
 
-Pipeline se spustí a začne zpracovávat stream.
+Pipeline se spustí a začne zpracovávat stream:
+1. Načte YOLO model (~6MB YOLOv8n)
+2. Spustí FFmpeg pro čtení HLS streamu
+3. Začne detekovat a trackovat osoby
+4. Zobrazí live video s žlutými bounding boxy
+
+**První spuštění může trvat 5-10 sekund** (načítání modelu).
 
 ### 4. Zastavte analýzu
 
@@ -240,28 +260,65 @@ ski-cam-analytics/
 
 ## 🔧 Troubleshooting
 
-### FFmpeg stream nefunguje
-- Ověřte že FFmpeg je nainstalován: `ffmpeg -version`
-- Zkuste stream ručně: `ffmpeg -i https://stream.teal.cz/hls/cam273.m3u8 -t 5 test.mp4`
-- Zkontrolujte firewall / síťové připojení
+### ❌ Chyba: "FFmpeg není nainstalován nebo není v PATH!"
+**Příčina:** FFmpeg není dostupný v systémové PATH proměnné.
 
-### Model nenalezen
-- Ověřte že `models/yolo.onnx` existuje
-- Zkontrolujte cestu v `config.py`
+**Řešení:**
+1. Nainstalujte FFmpeg (viz instalační sekce)
+2. **Windows:** Restartujte PowerShell terminál po instalaci
+3. Ověřte: `ffmpeg -version`
+4. Pokud instalace proběhla v aktuální session, aktualizujte PATH:
+   ```powershell
+   $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
+   ```
 
-### Nízké FPS
+### ❌ Chyba: "Failed to start pipeline" (500 error)
+**Možné příčiny:**
+1. Model `models/yolo.onnx` neexistuje nebo má špatný název
+2. FFmpeg není v PATH
+3. Stream je nedostupný (síť, firewall)
+
+**Řešení:**
+1. Ověřte existenci modelu: `ls models/yolo.onnx`
+2. Zkontrolujte FFmpeg: `ffmpeg -version`
+3. Otestujte stream ručně:
+   ```bash
+   ffmpeg -i https://stream.teal.cz/hls/cam273.m3u8 -t 5 test.mp4
+   ```
+
+### ❌ "No frame available" na dashboardu
+**Příčina:** Pipeline neběží nebo neprodukuje frames.
+
+**Řešení:**
+1. Klikněte na START ANALÝZY
+2. Zkontrolujte server logy v terminálu
+3. Ověřte že stream funguje (viz výše)
+
+### ❌ Server crashuje při POST /api/pipeline/start
+**Příčina:** Bug v lifespan manageru (opraveno ve verzi 1.1).
+
+**Řešení:**
+- Aktualizujte kód (`git pull`)
+- Ověřte že `main.py` obsahuje `global broadcast_task`
+
+### 🐌 Nízké FPS / pomalé zpracování
+**Řešení:**
 - Snižte `FFMPEG_FPS` v config (např. na 4-6)
-- Snižte rozlišení (`FRAME_WIDTH`, `FRAME_HEIGHT`)
-- Použijte menší YOLO model (yolov8n, yolov5n)
+- Snižte rozlišení (`FRAME_WIDTH=480`, `FRAME_HEIGHT=360`)
+- Použijte menší YOLO model (yolov8n)
 
-### Špatná detekce
+### 🎯 Špatná nebo žádná detekce
+**Řešení:**
 - Zvyšte/snižte `CONF_THRESHOLD` (0.3-0.6)
-- Nastavte ROI na relevantní oblast
-- Zkuste jiný YOLO model
+- Nastavte ROI na relevantní oblast v `config.py`
+- Zkuste jiný YOLO model (yolov8s pro vyšší přesnost)
 
-### Pipeline se automaticky spouští
-- **Nemělo by se stávat!** Pipeline se spouští pouze přes `/api/pipeline/start`
-- Zkontrolujte že jste neupravili `main.py` lifespan
+### 🌙 Noční provoz (tmavé video)
+**Poznámka:** YOLO model detekuje špatně za tmy.
+
+**Řešení:**
+- Použijte model trénovaný na nočních datech
+- Nebo vypněte analýzu v noci (není to daemon, spouští se ručně)
 
 ---
 
