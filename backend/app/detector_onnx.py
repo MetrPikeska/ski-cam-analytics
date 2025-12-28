@@ -174,12 +174,32 @@ class YOLODetector:
         
         # Konverze z (x_center, y_center, w, h) na (x1, y1, x2, y2)
         x_center, y_center, w, h = boxes[:, 0], boxes[:, 1], boxes[:, 2], boxes[:, 3]
+        
+        # DEBUG: První box před transformací
+        if len(boxes) > 0:
+            logger.info(f"DEBUG: First box BEFORE transform: x_center={x_center[0]:.2f}, y_center={y_center[0]:.2f}, w={w[0]:.2f}, h={h[0]:.2f}")
+            logger.info(f"DEBUG: scale={scale:.3f}, pad_w={pads[0]}, pad_h={pads[1]}, input_size={self.input_size}")
+        
+        # CRITICAL FIX: YOLO outputs normalized coordinates (0-1), must denormalize first
+        # Multiply by input_size to get pixel coordinates in model space
+        input_w, input_h = self.input_size
+        x_center = x_center * input_w
+        y_center = y_center * input_h
+        w = w * input_w
+        h = h * input_h
+        
+        if len(boxes) > 0:
+            logger.info(f"DEBUG: After denormalization: x_center={x_center[0]:.2f}, y_center={y_center[0]:.2f}, w={w[0]:.2f}, h={h[0]:.2f}")
+        
         x1 = x_center - w / 2
         y1 = y_center - h / 2
         x2 = x_center + w / 2
         y2 = y_center + h / 2
         
         boxes_xyxy = np.stack([x1, y1, x2, y2], axis=1)
+        
+        if len(boxes_xyxy) > 0:
+            logger.info(f"DEBUG: First box IN MODEL SPACE: x1={boxes_xyxy[0,0]:.2f}, y1={boxes_xyxy[0,1]:.2f}, x2={boxes_xyxy[0,2]:.2f}, y2={boxes_xyxy[0,3]:.2f}")
         
         # Převést souřadnice zpět na originální frame PŘED NMS
         pad_w, pad_h = pads
@@ -188,6 +208,9 @@ class YOLODetector:
         # Konverze všech boxů zpět na původní souřadnice
         boxes_xyxy[:, [0, 2]] = (boxes_xyxy[:, [0, 2]] - pad_w) / scale  # x1, x2
         boxes_xyxy[:, [1, 3]] = (boxes_xyxy[:, [1, 3]] - pad_h) / scale  # y1, y2
+        
+        if len(boxes_xyxy) > 0:
+            logger.info(f"DEBUG: First box AFTER TRANSFORM: x1={boxes_xyxy[0,0]:.2f}, y1={boxes_xyxy[0,1]:.2f}, x2={boxes_xyxy[0,2]:.2f}, y2={boxes_xyxy[0,3]:.2f}")
         
         # NMS (Non-Maximum Suppression) - teď na původních souřadnicích
         indices = self._nms(boxes_xyxy, person_scores, self.iou_threshold)
@@ -199,17 +222,27 @@ class YOLODetector:
         
         detections = []
         for i, (box, score) in enumerate(zip(boxes_xyxy, person_scores)):
+            # DEBUG: Vypisovat první pár boxů
+            if i < 3:
+                logger.info(f"DEBUG BOX {i}: RAW box = {box}, score = {score:.2f}")
+            
             # Převést na int a clampnout
             x1 = int(box[0])
             y1 = int(box[1])
             x2 = int(box[2])
             y2 = int(box[3])
             
+            if i < 3:
+                logger.info(f"DEBUG BOX {i}: After int() = ({x1}, {y1}, {x2}, {y2})")
+            
             # Clamp do rozměrů frame
             x1 = max(0, min(x1, orig_w))
             y1 = max(0, min(y1, orig_h))
             x2 = max(0, min(x2, orig_w))
             y2 = max(0, min(y2, orig_h))
+            
+            if i < 3:
+                logger.info(f"DEBUG BOX {i}: After clamp (orig_w={orig_w}, orig_h={orig_h}) = ({x1}, {y1}, {x2}, {y2})")
             
             detections.append(Detection(
                 bbox=(x1, y1, x2, y2),
