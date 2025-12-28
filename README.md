@@ -19,6 +19,249 @@ MVP aplikace pro počítání lidí v lyžařském areálu z HLS video streamu.
 
 ---
 
+## 🏗️ Architektura
+
+### Přehled systému
+
+```
+┌─────────────┐
+│ HLS Stream  │ (stream.teal.cz/cam273)
+└──────┬──────┘
+       │
+       ▼
+┌─────────────────────────────────────────┐
+│         BACKEND (Python/FastAPI)        │
+│                                         │
+│  ┌─────────────────────────────────┐   │
+│  │  FFmpegSource                   │   │ ← Načítá HLS stream
+│  │  - Spouští ffmpeg subprocess    │   │   přes FFmpeg
+│  │  - Dekóduje na raw frames       │   │
+│  │  - Poskytuje frame queue        │   │
+│  └──────────────┬──────────────────┘   │
+│                 │                       │
+│                 ▼                       │
+│  ┌─────────────────────────────────┐   │
+│  │  YOLODetector (ONNX)            │   │ ← Detekce osob
+│  │  - YOLO v8n model (CPU)         │   │   YOLO v8n ONNX
+│  │  - Postprocess + NMS            │   │
+│  │  - Vrací bbox detections        │   │
+│  └──────────────┬──────────────────┘   │
+│                 │                       │
+│                 ▼                       │
+│  ┌─────────────────────────────────┐   │
+│  │  Analytics (ROI Filter)         │   │ ← Filtrování ROI
+│  │  - Filtruje podle ROI rect      │   │
+│  └──────────────┬──────────────────┘   │
+│                 │                       │
+│                 ▼                       │
+│  ┌─────────────────────────────────┐   │
+│  │  SORTTracker                    │   │ ← Tracking osob
+│  │  - SORT algoritmus              │   │   (Kalman filter)
+│  │  - Kalman filter predikce       │   │
+│  │  - Hungarian matching           │   │
+│  │  - Vrací track IDs + bboxes     │   │
+│  └──────────────┬──────────────────┘   │
+│                 │                       │
+│                 ▼                       │
+│  ┌─────────────────────────────────┐   │
+│  │  Analytics (Metrics)            │   │ ← Počítání metrik
+│  │  - Occupancy counter            │   │
+│  │  - Line crossing detector       │   │
+│  │  - Sliding window stats         │   │
+│  └──────────────┬──────────────────┘   │
+│                 │                       │
+│                 ▼                       │
+│  ┌─────────────────────────────────┐   │
+│  │  MetricsStorage (SQLite)        │   │ ← Ukládání do DB
+│  │  - Agregace po minutách         │   │
+│  │  - Occupancy avg/max            │   │
+│  │  - Crossings per minute         │   │
+│  └─────────────────────────────────┘   │
+│                                         │
+│  ┌─────────────────────────────────┐   │
+│  │  Pipeline (main loop)           │   │ ← Hlavní smyčka
+│  │  - Threading orchestration      │   │
+│  │  - FPS control                  │   │
+│  │  - Visualization overlay        │   │
+│  └─────────────────────────────────┘   │
+│                                         │
+│  ┌─────────────────────────────────┐   │
+│  │  FastAPI Server                 │   │ ← REST API
+│  │  - /api/pipeline/start          │   │
+│  │  - /api/pipeline/stop           │   │
+│  │  - /api/status                  │   │
+│  │  - /api/metrics/latest          │   │
+│  │  - /api/metrics/timeseries      │   │
+│  │  - /api/frame/latest (MJPEG)    │   │
+│  │  - WebSocket /ws/live           │   │
+│  └─────────────────────────────────┘   │
+└─────────────┬───────────────────────────┘
+              │ HTTP/WebSocket
+              ▼
+┌─────────────────────────────────────────┐
+│     FRONTEND (HTML/JS/Chart.js)         │
+│                                         │
+│  - Real-time dashboard                  │
+│  - START/STOP controls                  │
+│  - Live video feed s vizualizací        │
+│  - Metriky (occupancy, crossings)       │
+│  - Grafy (Chart.js)                     │
+│  - WebSocket updates                    │
+└─────────────────────────────────────────┘
+```
+
+### Processing Pipeline Flow
+
+```
+1. HLS Stream → FFmpeg subprocess
+   ├─ Dekódování HLS (.m3u8)
+   ├─ Downsampling na 8 FPS
+   ├─ Resize na 640x480
+   └─ Output: raw BGR frames (numpy)
+
+2. Frame → YOLO Detector
+   ├─ Preprocessing (resize 640x640, letterbox padding)
+   ├─ ONNX inference (CPU)
+   ├─ Postprocess (coordinate transform, NMS)
+   └─ Output: List[Detection] (bbox, conf, class)
+
+3. Detections → ROI Filter
+   ├─ Filtrování podle ROI rectangle
+   └─ Output: filtered bboxes
+
+4. Filtered Bboxes → SORT Tracker
+   ├─ Kalman filter prediction
+   ├─ Hungarian assignment (IoU matching)
+   ├─ Track management (new/confirmed/lost)
+   └─ Output: List[Track] (id, bbox, state)
+
+5. Tracks → Analytics
+   ├─ Occupancy = počet active tracks
+   ├─ Line Crossing = track centroid crosses line
+   ├─ Sliding window (1m, 10m stats)
+   └─ Output: Metrics dict
+
+6. Metrics → Storage + Frontend
+   ├─ Agregace po minutách → SQLite
+   ├─ WebSocket broadcast → Dashboard
+   └─ REST API endpoints → Charts
+```
+
+### Komponenty
+
+#### Backend (Python/FastAPI)
+
+**main.py** - FastAPI server
+- Lifespan: Server se spouští, ale pipeline **NE** (jen na request)
+- REST API endpoints pro ovládání a monitoring
+- WebSocket `/ws/live` pro real-time broadcast metrik
+- Statické soubory pro frontend
+
+**pipeline.py** - Hlavní processing loop
+- Orchestruje celý flow (FFmpeg → YOLO → Tracker → Analytics)
+- Threading - vlastní thread pro processing
+- Manuální start/stop (přes API)
+- Per-minute agregace do databáze
+- FPS counter a monitoring
+
+**ffmpeg_source.py** - HLS stream reader
+- FFmpeg subprocess s pipes
+- Threading Queue pro buffering frames
+- Parametry: fps=8, scale=640x480, raw BGR output
+- Automatické reconnect při výpadku
+
+**detector_onnx.py** - YOLO detekce
+- ONNX Runtime (CPU inference)
+- Preprocessing: letterbox padding na 640x640
+- **Kritická oprava**: Coordinate transform **PŘED** NMS
+- NMS (IoU filtering) a confidence thresholding
+- Output: List[Detection] s bbox (x1,y1,x2,y2)
+
+**tracker.py** - SORT tracking
+- Kalman Filter: 7-state [x, y, s, r, vx, vy, vs]
+- Hungarian Algorithm pro IoU matching
+- Track states: Tentative → Confirmed → Lost
+- Deduplikace a track ID management
+
+**analytics.py** - Metriky a ROI
+- ROI Filter: filtruje boxy mimo region of interest
+- Occupancy Counter: počet active tracks
+- Line Crossing: cross product test + deduplikace
+- Sliding Windows: 1m a 10m statistiky
+
+**storage.py** - SQLite databáze
+- Tabulka `metrics_minute` (timestamp, occupancy_avg, occupancy_max, crossings)
+- Agregace per-minute (ukládá se pouze průměr, ne raw data)
+- Queries pro časové řady a grafy
+
+**config.py** - Centrální konfigurace
+- Stream URL, FPS, rozlišení
+- Detection thresholdy (confidence, IoU)
+- Tracking parametry (max_age, min_hits)
+- ROI rectangle a line crossing coordinates
+
+#### Frontend (HTML/JS)
+
+**index.html** - Dashboard UI
+- Control Panel (START/STOP buttons)
+- Live metriky (occupancy, crossings)
+- Live video feed
+- Canvas pro Chart.js grafy
+
+**app.js** - JavaScript logic
+- WebSocket client (auto-reconnect)
+- API calls (start/stop/status/metrics)
+- Chart.js: 2 grafy (occupancy trend, crossings)
+- Video refresh loop
+
+**styles.css** - Responsivní styling
+- Dark theme
+- Grid layout pro metriky
+- Status indicators (zelená/červená)
+
+### Thread Safety & Performance
+
+**Thread Management**:
+- `latest_frame` protected by `threading.Lock`
+- FFmpeg queue s max size 10 (předchází memory leaks)
+- WebSocket set pro broadcast bez race conditions
+
+**Error Handling**:
+- FFmpeg timeout na `get_frame()` (1s)
+- YOLO postprocess try/except
+- WebSocket auto-reconnect při výpadku
+- Graceful shutdown (cleanup resources)
+
+**Optimalizace**:
+- ONNX Runtime (rychlejší než PyTorch pro CPU)
+- Frame downsampling (8 FPS místo 25)
+- Agregace do DB pouze per-minute (ne každý frame)
+- NMS early rejection pro rychlejší filtering
+
+### Klíčové Funkce
+
+**1. Manuální Start/Stop**
+- Pipeline se **NESPOUŠTÍ automaticky** při startu serveru
+- Pouze když uživatel klikne START v dashboardu
+- Umožňuje kontrolované spuštění a šetří resources
+
+**2. Coordinate Transform Fix**
+- **KRITICKÁ OPRAVA** v detector_onnx.py
+- Transform koordinát z padded space (640x640) do original frame (480x640)
+- Musí být **PŘED** NMS, jinak boxy u padding edges → (0,0,0,0)
+
+**3. Real-time WebSocket Broadcast**
+- Server broadcastuje metriky každou 1s
+- Frontend update bez polling
+- Automatický reconnect při výpadku
+
+**4. Per-Minute Agregace**
+- Každou minutu se uloží: avg occupancy, max occupancy, crossings
+- Šetří místo v DB (ne každý frame)
+- Dostatečné pro časové řady a reporty
+
+---
+
 ## 🚀 Instalace
 
 ### 1. Požadavky
