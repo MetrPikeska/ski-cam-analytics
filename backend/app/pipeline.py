@@ -14,7 +14,7 @@ from typing import Optional
 from . import config
 from .ffmpeg_source import FFmpegSource
 from .detector_onnx import YOLODetector
-from .tracker import SORTTracker
+# from .tracker import SORTTracker  # Disabled - using detection only
 from .analytics import Analytics
 from .storage import MetricsStorage
 
@@ -35,7 +35,7 @@ class Pipeline:
         # Komponenty (vytvoří se až při startu)
         self.ffmpeg: Optional[FFmpegSource] = None
         self.detector: Optional[YOLODetector] = None
-        self.tracker: Optional[SORTTracker] = None
+        # self.tracker: Optional[SORTTracker] = None  # Disabled - detection only
         self.analytics: Optional[Analytics] = None
         self.storage: Optional[MetricsStorage] = None
         
@@ -48,6 +48,14 @@ class Pipeline:
         self.start_time: Optional[datetime] = None
         self.fps_counter = deque(maxlen=30)
         self.current_fps = 0.0
+        
+        # Current metrics (without analytics)
+        self.current_occupancy: int = 0
+        self.current_crossings: int = 0
+        
+        # Line crossing detection (simple version without tracking)
+        self.previous_centers: set = set()  # Množina center bboxů z minulého framu
+        self.crossing_cooldown: dict = {}  # {center: frame_count} pro cooldown
         
         # Vizualizace
         self.latest_frame: Optional[np.ndarray] = None
@@ -85,12 +93,12 @@ class Pipeline:
                 input_size=(640, 640)
             )
             
-            # Vytvořit tracker
-            self.tracker = SORTTracker(
-                max_age=config.TRACKER_MAX_AGE,
-                min_hits=config.TRACKER_MIN_HITS,
-                iou_threshold=config.TRACKER_IOU_THRESHOLD
-            )
+            # Tracking DISABLED - using detection only
+            # self.tracker = SORTTracker(
+            #     max_age=config.TRACKER_MAX_AGE,
+            #     min_hits=config.TRACKER_MIN_HITS,
+            #     iou_threshold=config.TRACKER_IOU_THRESHOLD
+            # )
             
             # Vytvořit analytics
             self.analytics = Analytics(
@@ -165,7 +173,7 @@ class Pipeline:
             self.ffmpeg = None
         
         self.detector = None
-        self.tracker = None
+        # self.tracker = None  # Disabled
         self.analytics = None
         # storage ponechat (potřebujeme pro čtení dat)
     
@@ -197,17 +205,23 @@ class Pipeline:
                 filtered_bboxes = self.analytics.roi_filter.filter_detections(det_bboxes)
                 logger.debug(f"DEBUG Pipeline: {len(filtered_bboxes)} after ROI filter")
                 
-                # 3. Tracking
-                tracks = self.tracker.update(filtered_bboxes)
-                logger.debug(f"DEBUG Pipeline: {len(tracks)} tracks")
+                # 3. TRACKING DISABLED - using detections directly
+                # tracks = self.tracker.update(filtered_bboxes)
+                # logger.debug(f"DEBUG Pipeline: {len(tracks)} tracks")
                 
-                # 4. Analytics (occupancy, line crossing)
-                self.analytics.update(tracks)
-                metrics = self.analytics.get_metrics()
-                logger.debug(f"DEBUG Pipeline: Occupancy={metrics['occupancy']}")
+                # 4. Analytics (occupancy using detections)
+                # Using filtered_bboxes as "tracks" for occupancy counting
+                self.current_occupancy = len(filtered_bboxes)
+                logger.debug(f"DEBUG Pipeline: Occupancy={self.current_occupancy}")
                 
-                # 5. Vizualizace
-                vis_frame = self._draw_visualizations(frame.copy(), filtered_bboxes, tracks)
+                # Simple line crossing detection (without tracking)
+                self._detect_line_crossings(filtered_bboxes, frame_count)
+                
+                # Store occupancy for minute aggregation
+                self.minute_occupancy_values.append(self.current_occupancy)
+                
+                # 5. Vizualizace (only detections)
+                vis_frame = self._draw_visualizations(frame.copy(), filtered_bboxes, [])
                 with self.frame_lock:
                     self.latest_frame = vis_frame
                 
@@ -226,11 +240,10 @@ class Pipeline:
                     self.current_fps = 30 / elapsed if elapsed > 0 else 0
                     last_fps_time = time.time()
                     
-                    metrics = self.analytics.get_metrics()
                     logger.info(
                         f"FPS: {self.current_fps:.1f} | "
-                        f"Occupancy: {metrics['occupancy']} | "
-                        f"Crossings: {metrics['crossings_this_run']}"
+                        f"Occupancy: {self.current_occupancy} | "
+                        f"Detections: {len(detections)}"
                     )
                 
             except Exception as e:
@@ -239,19 +252,86 @@ class Pipeline:
         
         logger.info("Processing loop finished")
     
+    def _detect_line_crossings(self, bboxes: list, frame_count: int):
+        """
+        Jednoduché počítání překročení linie bez trackingu.
+        Detekuje kdy střed bbox protíná linii.
+        
+        Args:
+            bboxes: Seznam bbox (x1, y1, x2, y2)
+            frame_count: Číslo aktuálního framu
+        """
+        if not self.analytics or not self.analytics.line_counter or not self.analytics.line_counter.line:
+            return
+        
+        line_p1, line_p2 = self.analytics.line_counter.line
+        
+        # Vypočítat středy všech bboxů
+        current_centers = set()
+        for bbox in bboxes:
+            x1, y1, x2, y2 = bbox
+            cx = int((x1 + x2) / 2)
+            cy = int((y1 + y2) / 2)
+            
+            # Zkontrolovat jestli střed bbox je blízko linie
+            distance = self._point_to_line_distance(cx, cy, line_p1, line_p2)
+            
+            # Pokud je vzdálenost menší než 20 pixelů, považujeme to za dotyk
+            if distance < 20:
+                # Střední tolerance - 60px oblast (jeden lyžař cca 50-60px široký)
+                center_key = (round(cx / 60) * 60, round(cy / 60) * 60)
+                
+                # Zkontrolovat cooldown - 120 framů = 2 sekundy (lyžař projede linii za cca 1 sekundu)
+                if center_key not in self.crossing_cooldown or (frame_count - self.crossing_cooldown[center_key]) > 120:
+                    self.current_crossings += 1
+                    self.crossing_cooldown[center_key] = frame_count
+                    logger.info(f"LINE CROSSING detected at ({cx}, {cy}) - Total: {self.current_crossings}")
+        
+        # Vyčistit staré položky z cooldown (starší než 240 framů = 4 sekundy)
+        old_keys = [k for k, v in self.crossing_cooldown.items() if frame_count - v > 240]
+        for k in old_keys:
+            del self.crossing_cooldown[k]
+        
+        # Uložit current jako previous pro příští frame
+        self.previous_centers = current_centers
+    
+    def _point_to_line_distance(self, px: int, py: int, line_p1: tuple, line_p2: tuple) -> float:
+        """
+        Vypočítá kolmou vzdálenost bodu od úsečky.
+        
+        Args:
+            px, py: Souřadnice bodu
+            line_p1, line_p2: Krajní body úsečky
+            
+        Returns:
+            Vzdálenost v pixelech
+        """
+        x1, y1 = line_p1
+        x2, y2 = line_p2
+        
+        # Délka úsečky
+        line_length_sq = (x2 - x1)**2 + (y2 - y1)**2
+        if line_length_sq == 0:
+            # Linie je bod
+            return ((px - x1)**2 + (py - y1)**2)**0.5
+        
+        # Parametr t pro projekci bodu na přímku
+        t = max(0, min(1, ((px - x1) * (x2 - x1) + (py - y1) * (y2 - y1)) / line_length_sq))
+        
+        # Nejbližší bod na úsečce
+        proj_x = x1 + t * (x2 - x1)
+        proj_y = y1 + t * (y2 - y1)
+        
+        # Vzdálenost
+        return ((px - proj_x)**2 + (py - proj_y)**2)**0.5
+    
     def _check_minute_aggregate(self):
         """
         Kontroluje zda uplynula minuta a ukládá agregaci do DB.
         """
         now = datetime.now()
         
-        # Uložit aktuální occupancy pro průměr
-        metrics = self.analytics.get_metrics()
-        self.minute_occupancy_values.append(metrics['occupancy'])
-        
-        # Přičíst nové crossingy
-        # (crossings_last_1m je už za celou minutu, takže použijeme delta)
-        # Pro jednoduchost: počítáme total crossings a bereme rozdíl
+        # Occupancy už je přidaná v processing_loop
         
         # Každou minutu uložit
         if (now - self.last_minute_save) >= timedelta(minutes=1):
@@ -266,9 +346,8 @@ class Pipeline:
         avg_occupancy = sum(self.minute_occupancy_values) / len(self.minute_occupancy_values)
         max_occupancy = max(self.minute_occupancy_values)
         
-        # Crossingy za tuto minutu
-        metrics = self.analytics.get_metrics()
-        crossings = metrics['crossings_last_1m']
+        # Use current crossings count
+        crossings = self.current_crossings
         
         # Uložit do DB
         timestamp = datetime.now().replace(second=0, microsecond=0)
@@ -278,6 +357,8 @@ class Pipeline:
             occupancy_max=max_occupancy,
             crossings=crossings
         )
+        
+        logger.debug(f"Saved minute aggregate: {timestamp}, avg={avg_occupancy:.1f}, max={max_occupancy}, crossings={crossings}")
         
         # Reset pro další minutu
         self.minute_occupancy_values = []
@@ -312,16 +393,14 @@ class Pipeline:
         Returns:
             Dict s metrikami
         """
-        if not self.analytics:
-            return {
-                'timestamp': datetime.now(),
-                'occupancy': 0,
-                'crossings_this_run': 0,
-                'crossings_last_1m': 0,
-                'crossings_last_10m': 0
-            }
-        
-        return self.analytics.get_metrics()
+        # Return simple metrics without analytics tracking
+        return {
+            'timestamp': datetime.now(),
+            'occupancy': self.current_occupancy,
+            'crossings_this_run': self.current_crossings,
+            'crossings_last_1m': 0,
+            'crossings_last_10m': 0
+        }
     
     def get_latest_frame(self) -> Optional[np.ndarray]:
         """
@@ -353,12 +432,12 @@ class Pipeline:
         h, w = frame.shape[:2]
         
         # ROI obdélník (tenčí, šedá)
-        if self.analytics.roi_filter.roi_rect:
+        if self.analytics and self.analytics.roi_filter.roi_rect:
             x1, y1, x2, y2 = self.analytics.roi_filter.roi_rect
             cv2.rectangle(frame, (x1, y1), (x2, y2), (128, 128, 128), 1)
         
         # Line crossing (žlutá, tlustší)
-        if self.analytics.line_counter.line:
+        if self.analytics and self.analytics.line_counter and self.analytics.line_counter.line:
             p1, p2 = self.analytics.line_counter.line
             cv2.line(frame, p1, p2, (0, 255, 255), 3)
         
@@ -379,7 +458,10 @@ class Pipeline:
             cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 0, 255), 3)
         
         # Dashboard panel vlevo nahoře - jako na screenshotu
-        metrics = self.analytics.get_metrics()
+        metrics = {
+            'occupancy': self.current_occupancy,
+            'crossings_this_run': self.current_crossings
+        }
         panel_width = 280
         panel_height = 110
         

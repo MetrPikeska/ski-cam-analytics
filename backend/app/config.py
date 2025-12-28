@@ -12,7 +12,7 @@ STREAM_URL = "https://stream.teal.cz/hls/cam273.m3u8"
 
 # ONNX Model
 MODEL_PATH = BASE_DIR / "models" / "yolo.onnx"
-CONF_THRESHOLD = 0.15  # Confidence threshold pro detekce (sníženo pro testování)
+CONF_THRESHOLD = 0.34  # Confidence threshold pro detekce
 IOU_THRESHOLD = 0.45  # NMS threshold
 
 # FFmpeg
@@ -27,12 +27,11 @@ TRACKER_IOU_THRESHOLD = 0.3  # IoU threshold pro matching tracků
 
 # Region of Interest (ROI) - souřadnice obdélníku [x1, y1, x2, y2]
 # None = celý frame, jinak tuple (x1, y1, x2, y2) v pixelech
-ROI_RECT = None  # TODO: Nastavit podle konkrétní kamery
-# Příklad: ROI_RECT = (100, 150, 540, 450)
+ROI_RECT = (438, 205, 480, 291)  # Selected area for skier counting
 
 # Line Crossing - čára definovaná dvěma body [(x1, y1), (x2, y2)]
 # None = vypnuto
-LINE_CROSSING = None  # TODO: Nastavit podle pozice vleku/brány
+LINE_CROSSING = [(494, 212), (446, 283)]  # Counting line for ski lift
 # Příklad: LINE_CROSSING = [(200, 300), (440, 300)]  # horizontální čára
 
 # Database
