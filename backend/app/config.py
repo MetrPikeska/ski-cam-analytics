@@ -12,7 +12,7 @@ STREAM_URL = "https://stream.teal.cz/hls/cam273.m3u8"
 
 # ONNX Model
 MODEL_PATH = BASE_DIR / "models" / "yolo.onnx"
-CONF_THRESHOLD = 0.4  # Confidence threshold pro detekce
+CONF_THRESHOLD = 0.15  # Confidence threshold pro detekce (sníženo pro testování)
 IOU_THRESHOLD = 0.45  # NMS threshold
 
 # FFmpeg
@@ -22,7 +22,7 @@ FRAME_HEIGHT = 480  # Resize frame height
 
 # Tracking
 TRACKER_MAX_AGE = 30  # Max frames bez detekce než track zanikne
-TRACKER_MIN_HITS = 3  # Min počet detekcí pro "confirmed" track
+TRACKER_MIN_HITS = 1  # Min počet detekcí pro "confirmed" track (sníženo na 1 pro okamžité tracky)
 TRACKER_IOU_THRESHOLD = 0.3  # IoU threshold pro matching tracků
 
 # Region of Interest (ROI) - souřadnice obdélníku [x1, y1, x2, y2]
@@ -46,4 +46,4 @@ API_PORT = 8000
 WS_UPDATE_INTERVAL = 1.0  # Interval pro push metrik přes WebSocket (sekundy)
 
 # Logging
-LOG_LEVEL = "INFO"
+LOG_LEVEL = "DEBUG"

@@ -137,21 +137,37 @@ class YOLODetector:
         
         output = outputs[0]
         
+        # DEBUG: Zkontrolovat tvar výstupu
+        logger.debug(f"DEBUG: Raw output shape before transpose: {output.shape}")
+        
         # Transpose pokud je třeba: (1, 84, 8400) -> (8400, 84)
         if len(output.shape) == 3:
             output = output[0].transpose()  # (num_boxes, 84)
+        
+        logger.debug(f"DEBUG: Output shape after transpose: {output.shape}")
+        logger.debug(f"DEBUG: Sample output row (first 10 values): {output[0, :10]}")
         
         # Extrahovat bboxes a scores
         boxes = output[:, :4]  # (num_boxes, 4)
         scores = output[:, 4:]  # (num_boxes, 80) pro 80 tříd COCO
         
+        logger.debug(f"DEBUG: Scores shape: {scores.shape}")
+        logger.debug(f"DEBUG: Sample scores (first box, all classes): {scores[0, :]}")
+        
         # Získat pouze class 0 (person)
         person_scores = scores[:, 0]
+        
+        # DEBUG: Vypsání max confidence
+        if len(person_scores) > 0:
+            max_conf = person_scores.max()
+            logger.debug(f"DEBUG: Max person confidence: {max_conf:.3f}, Total boxes: {len(person_scores)}")
         
         # Filtrovat podle confidence
         mask = person_scores > self.conf_threshold
         boxes = boxes[mask]
         person_scores = person_scores[mask]
+        
+        logger.debug(f"DEBUG: Boxes after confidence filter: {len(boxes)}")
         
         if len(boxes) == 0:
             return []
@@ -165,23 +181,29 @@ class YOLODetector:
         
         boxes_xyxy = np.stack([x1, y1, x2, y2], axis=1)
         
-        # NMS (Non-Maximum Suppression)
+        # Převést souřadnice zpět na originální frame PŘED NMS
+        pad_w, pad_h = pads
+        orig_h, orig_w = orig_shape
+        
+        # Konverze všech boxů zpět na původní souřadnice
+        boxes_xyxy[:, [0, 2]] = (boxes_xyxy[:, [0, 2]] - pad_w) / scale  # x1, x2
+        boxes_xyxy[:, [1, 3]] = (boxes_xyxy[:, [1, 3]] - pad_h) / scale  # y1, y2
+        
+        # NMS (Non-Maximum Suppression) - teď na původních souřadnicích
         indices = self._nms(boxes_xyxy, person_scores, self.iou_threshold)
         
         boxes_xyxy = boxes_xyxy[indices]
         person_scores = person_scores[indices]
         
-        # Převést souřadnice zpět na originální frame
-        pad_w, pad_h = pads
-        orig_h, orig_w = orig_shape
+        logger.debug(f"DETECTOR: After NMS: {len(boxes_xyxy)} boxes")
         
         detections = []
-        for box, score in zip(boxes_xyxy, person_scores):
-            # Odečíst padding a škálovat zpět
-            x1 = int((box[0] - pad_w) / scale)
-            y1 = int((box[1] - pad_h) / scale)
-            x2 = int((box[2] - pad_w) / scale)
-            y2 = int((box[3] - pad_h) / scale)
+        for i, (box, score) in enumerate(zip(boxes_xyxy, person_scores)):
+            # Převést na int a clampnout
+            x1 = int(box[0])
+            y1 = int(box[1])
+            x2 = int(box[2])
+            y2 = int(box[3])
             
             # Clamp do rozměrů frame
             x1 = max(0, min(x1, orig_w))
@@ -257,6 +279,13 @@ class YOLODetector:
         
         # Inference
         outputs = self.session.run(self.output_names, {self.input_name: input_tensor})
+        
+        # DEBUG: Vypsání tvaru výstupu
+        if not hasattr(self, '_debug_printed'):
+            logger.info(f"DEBUG: Output shapes: {[o.shape for o in outputs]}")
+            logger.info(f"DEBUG: Input shape: {input_tensor.shape}")
+            logger.info(f"DEBUG: Frame shape: ({orig_h}, {orig_w})")
+            self._debug_printed = True
         
         # Postprocessing
         detections = self.postprocess(outputs, scale, pads, (orig_h, orig_w))

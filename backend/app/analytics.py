@@ -145,6 +145,9 @@ class ROIFilter:
         Returns:
             True pokud střed bboxu je v ROI
         """
+        # ROI filtering vypnuto - vracíme vždy True
+        return True
+        
         if self.roi_rect is None:
             return True
         

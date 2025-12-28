@@ -6,6 +6,9 @@ Využívá IoU matching pro asociaci detekcí s existujícími tracky.
 import numpy as np
 from typing import List, Tuple, Optional
 from collections import deque
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 def iou(bbox1: Tuple[int, int, int, int], bbox2: Tuple[int, int, int, int]) -> float:
@@ -137,6 +140,10 @@ class SORTTracker:
         Returns:
             Seznam aktivních confirmed tracků
         """
+        logger.debug(f"TRACKER.UPDATE: Přišlo {len(detections)} detekcí")
+        if len(detections) > 0:
+            logger.debug(f"TRACKER.UPDATE: První detekce: {detections[0]}")
+        
         # Predikce pro všechny existující tracky
         for track in self.tracks:
             track.predict()
@@ -144,13 +151,17 @@ class SORTTracker:
         # Matching detekcí s tracky
         matched_tracks, unmatched_detections = self._match(detections)
         
+        logger.debug(f"TRACKER.UPDATE: Matched {len(matched_tracks)} pairs, Unmatched {len(unmatched_detections)} detections")
+        
         # Aktualizovat matchované tracky
         for track_idx, det_idx in matched_tracks:
+            logger.debug(f"TRACKER.UPDATE: Updating track {track_idx} with detection {det_idx}: {detections[det_idx]}")
             self.tracks[track_idx].update(detections[det_idx])
         
         # Vytvořit nové tracky pro nematchované detekce
         for det_idx in unmatched_detections:
             new_track = Track(detections[det_idx], max_age=self.max_age)
+            logger.debug(f"TRACKER.UPDATE: Creating new track with bbox: {detections[det_idx]}")
             self.tracks.append(new_track)
         
         # Odstranit mrtvé tracky
@@ -158,6 +169,10 @@ class SORTTracker:
         
         # Vrátit pouze confirmed tracky
         confirmed = [t for t in self.tracks if t.is_confirmed(self.min_hits)]
+        logger.debug(f"TRACKER.UPDATE: Returning {len(confirmed)} confirmed tracks")
+        if len(confirmed) > 0:
+            logger.debug(f"TRACKER.UPDATE: První confirmed track bbox: {confirmed[0].bbox}")
+        
         return confirmed
     
     def _match(self, detections: List[Tuple[int, int, int, int]]) -> Tuple[List[Tuple[int, int]], List[int]]:

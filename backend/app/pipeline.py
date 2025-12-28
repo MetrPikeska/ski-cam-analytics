@@ -190,16 +190,21 @@ class Pipeline:
                 
                 # 1. Detekce
                 detections = self.detector.detect(frame)
+                logger.debug(f"DEBUG Pipeline: {len(detections)} detections")
                 
                 # 2. Filtrování podle ROI
                 det_bboxes = [d.bbox for d in detections]
                 filtered_bboxes = self.analytics.roi_filter.filter_detections(det_bboxes)
+                logger.debug(f"DEBUG Pipeline: {len(filtered_bboxes)} after ROI filter")
                 
                 # 3. Tracking
                 tracks = self.tracker.update(filtered_bboxes)
+                logger.debug(f"DEBUG Pipeline: {len(tracks)} tracks")
                 
                 # 4. Analytics (occupancy, line crossing)
                 self.analytics.update(tracks)
+                metrics = self.analytics.get_metrics()
+                logger.debug(f"DEBUG Pipeline: Occupancy={metrics['occupancy']}")
                 
                 # 5. Vizualizace
                 vis_frame = self._draw_visualizations(frame.copy(), filtered_bboxes, tracks)
@@ -357,32 +362,21 @@ class Pipeline:
             p1, p2 = self.analytics.line_counter.line
             cv2.line(frame, p1, p2, (0, 255, 255), 3)
         
-        # Tracky (confirmed) - žluté boxy jako na screenshotu
+        # Detekce (surové) - zelené obdélníky SILNÉ (3px)
+        logger.debug(f"VIZUALIZACE: Kreslim {len(detections)} detekcí")
+        for bbox in detections:
+            x1, y1, x2, y2 = map(int, bbox)
+            logger.debug(f"  Detekce bbox: ({x1}, {y1}) - ({x2}, {y2})")
+            # Bounding box - ZELENÝ SILNÝ
+            cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 3)
+        
+        # Tracky (confirmed) - ČERVENÉ boxy SILNÉ (3px) pro viditelnost
+        logger.debug(f"VIZUALIZACE: Kreslim {len(tracks)} tracků")
         for track in tracks:
-            x1, y1, x2, y2 = track.bbox
-            
-            # Bounding box - žlutý
-            cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 255), 2)
-            
-            # Label nad boxem - černé pozadí, žlutý text
-            label = f"person"
-            label_size, _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
-            
-            # Pozadí pro label
-            cv2.rectangle(frame, 
-                         (x1, y1 - label_size[1] - 8), 
-                         (x1 + label_size[0] + 6, y1), 
-                         (0, 0, 0), -1)
-            
-            # Text
-            cv2.putText(frame, label, (x1 + 3, y1 - 5), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1, cv2.LINE_AA)
-            
-            # Trajektorie (tenčí, žlutá)
-            trajectory = track.get_trajectory()
-            if len(trajectory) > 1:
-                for i in range(len(trajectory)-1):
-                    cv2.line(frame, trajectory[i], trajectory[i+1], (0, 200, 200), 1)
+            x1, y1, x2, y2 = map(int, track.bbox)
+            logger.debug(f"  Track bbox: ({x1}, {y1}) - ({x2}, {y2})")
+            # Bounding box - ČERVENÝ SILNÝ
+            cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 0, 255), 3)
         
         # Dashboard panel vlevo nahoře - jako na screenshotu
         metrics = self.analytics.get_metrics()
